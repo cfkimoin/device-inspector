@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Inspector</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="sweep" aria-hidden="true"></div>
+  <header class="top">
+    <div class="brand">
+      <p class="eyebrow">Connected Inventions</p>
+      <h1>Device Inspector</h1>
+    </div>
+    <div class="top-meta">
+      <span id="schema-note" class="dim">Schemas</span>
+      <span id="call-count" class="call-count">Sigfox calls 0</span>
+    </div>
+  </header>
+
+  <section class="command">
+    <label class="field grow">
+      <span>Device id</span>
+      <input id="device-id" class="input" type="text" spellcheck="false" autocomplete="off" placeholder="Hex id, one device">
+    </label>
+    <label class="field">
+      <span>Sigfox key</span>
+      <select id="sigfox-profile" class="input"></select>
+    </label>
+    <label class="field">
+      <span>Insight key</span>
+      <select id="ci-profile" class="input"></select>
+    </label>
+    <label class="field">
+      <span>Insight window</span>
+      <select id="ci-range" class="input">
+        <option value="1d">1 day</option>
+        <option value="1w">7 days</option>
+        <option value="1mo">1 month</option>
+        <option value="3mo" selected>3 months</option>
+        <option value="all">All</option>
+      </select>
+    </label>
+    <div class="tz" role="group" aria-label="Time zone">
+      <button id="tz-local" type="button" class="tz-btn is-on">Local</button>
+      <button id="tz-utc" type="button" class="tz-btn">UTC</button>
+    </div>
+    <button id="inspect-btn" class="btn btn-green" type="button">Inspect</button>
+    <button id="creds-btn" class="btn" type="button">Keys</button>
+    <button id="export-btn" class="btn" type="button">Export</button>
+    <p id="status-line" class="status" role="status">Ready. One device, then message history, then Connected Insight.</p>
+  </section>
+
+  <main class="layout">
+    <section class="panel" aria-labelledby="dossier-title">
+      <div class="panel-head">
+        <h2 id="dossier-title">Device</h2>
+      </div>
+      <div id="comms-banner" class="comms comms-idle">
+        <span class="comms-dot"></span>
+        <div>
+          <div class="comms-label">Comms</div>
+          <p class="comms-detail">Communication state appears after the device call.</p>
+        </div>
+      </div>
+      <dl id="dossier-facts" class="facts"></dl>
+    </section>
+
+    <section class="panel" aria-labelledby="location-title">
+      <div class="panel-head">
+        <h2 id="location-title">Nearest cell</h2>
+      </div>
+      <p id="location-meta" class="meta">Basestation ids come from the latest message. Their coordinates come from the basestation API.</p>
+      <p class="legend"><span class="swatch swatch-weak"></span>weak<span class="swatch swatch-mid"></span>mid<span class="swatch swatch-strong"></span>strong RSSI</p>
+      <ul id="station-list" class="stations"></ul>
+      <canvas id="location-canvas" class="map" width="640" height="320"></canvas>
+      <p class="map-credit">Map data <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></p>
+    </section>
+
+    <section class="panel panel-insights" aria-labelledby="insights-title">
+      <div class="panel-head">
+        <h2 id="insights-title">Analysis</h2>
+      </div>
+      <div id="insights-body" class="insights"></div>
+    </section>
+
+    <section class="panel span-all" aria-labelledby="downlink-title">
+      <div class="panel-head">
+        <h2 id="downlink-title">Downlink</h2>
+        <button id="details-btn" class="btn btn-orange" type="button">Details</button>
+      </div>
+      <div id="downlink-body" class="downlink">
+        <p class="dim">Direct or webhook configuration is not loaded until Details is clicked.</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="sigfox-chart-title">
+      <div class="panel-head">
+        <h2 id="sigfox-chart-title">Sigfox history</h2>
+        <button id="sigfox-reload" class="btn btn-orange" type="button" hidden>Reload</button>
+        <label class="inline">
+          <span class="dim">Schema</span>
+          <select id="schema-select" class="input input-small"></select>
+        </label>
+        <label class="inline">
+          <span class="dim">Field</span>
+          <select id="sigfox-field" class="input input-small"></select>
+        </label>
+      </div>
+      <canvas id="sigfox-chart" class="chart" width="800" height="260"></canvas>
+      <p id="sigfox-readout" class="meta">History loads after the device is on screen. About three months, one paged call sequence.</p>
+      <div id="recent-frames" class="recent"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="ci-chart-title">
+      <div class="panel-head">
+        <h2 id="ci-chart-title">Connected Insight</h2>
+        <button id="insight-reload" class="btn btn-orange" type="button" hidden>Reload</button>
+        <label class="inline">
+          <span class="dim">Series</span>
+          <select id="ci-field" class="input input-small"></select>
+        </label>
+      </div>
+      <canvas id="ci-chart" class="chart" width="800" height="260"></canvas>
+      <p id="ci-readout" class="meta">Loads after the Sigfox history.</p>
+    </section>
+  </main>
+
+  <div id="cred-modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="cred-title">
+      <div class="panel-head">
+        <h2 id="cred-title">API keys</h2>
+        <button id="cred-close" class="btn" type="button">Close</button>
+      </div>
+      <p class="dim">Stored in this browser only. Sigfox uses a few group keys. Connected Insight needs a partner, corporate-admin, or corporate-user token. Provider tokens cannot read device observations.</p>
+      <div class="cred-grid">
+        <form id="sigfox-cred-form" class="cred-col">
+          <h3>Sigfox</h3>
+          <div id="sigfox-cred-list" class="cred-list"></div>
+          <label>Name <input id="sfx-name" class="input" type="text" maxlength="80" placeholder="Group name"></label>
+          <label>Login <input id="sfx-login" class="input" type="text" autocomplete="off" spellcheck="false"></label>
+          <label>Password <input id="sfx-password" class="input" type="password" autocomplete="off"></label>
+          <button class="btn btn-green" type="submit">Save Sigfox key</button>
+        </form>
+        <form id="ci-cred-form" class="cred-col">
+          <h3>Connected Insight</h3>
+          <div id="ci-cred-list" class="cred-list"></div>
+          <label>Name <input id="ci-name" class="input" type="text" maxlength="80" placeholder="Partner name"></label>
+          <label>Public token <input id="ci-token" class="input" type="password" autocomplete="off" spellcheck="false"></label>
+          <button class="btn btn-green" type="submit">Save Insight key</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="./data/payload_schemas.global.js"></script>
+  <script src="./data/build_info.global.js"></script>
+  <script src="./js/codec/codec.global.js"></script>
+  <script src="./js/vendor/connectedinsight.global.js"></script>
+  <script src="./js/format.js"></script>
+  <script src="./js/credentials.js"></script>
+  <script src="./js/sigfox.js"></script>
+  <script src="./js/decode.js"></script>
+  <script src="./js/insight-client.js"></script>
+  <script src="./js/snapshot.js"></script>
+  <script src="./js/charts.js"></script>
+  <script src="./js/rules/index.js"></script>
+  <script src="./js/rules/battery-change.js"></script>
+  <script src="./js/rules/network.js"></script>
+  <script src="./js/rules/silence.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
