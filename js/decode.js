@@ -88,7 +88,7 @@
         const scaled = scaleField(item, values[item.name], values[`${item.name}__meta`]);
         if (scaled) fields.push(scaled);
       }
-      return { variant: variant.name || "", error: "", fields };
+      return { variant: variant.name || "", error: "", fields, values };
     } catch (error) {
       return { variant: "", error: error.message || String(error), fields: [] };
     }
@@ -121,27 +121,280 @@
     return listSchemas().find((item) => item.slug === slug) || null;
   }
 
-  function suggestSchema(messages, deviceTypeName) {
+  function normalizeHints(hints) {
+    if (hints == null) return {};
+    if (typeof hints === "string") return { deviceTypeName: hints };
+    return hints;
+  }
+
+  function collapse(text) {
+    return String(text || "")
+      .toLowerCase()
+      .replace(/connected[_\s-]*(inventions|finland)/g, " ")
+      .replace(/[^a-z0-9.]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function slugifyTokens(text) {
+    return collapse(text).replace(/[.\s]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  }
+
+  function parseRevision(text) {
+    const raw = String(text || "");
+    const dotted = raw.match(/r?\s*(\d+)\s*[._]\s*(\d+)/i);
+    if (dotted) {
+      const major = Number(dotted[1]);
+      const minor = Number(dotted[2]);
+      return {
+        major,
+        minor,
+        label: `r${major}.${minor}`,
+        slug: `r${major}_${minor}`,
+        compact: `${major}_${minor}`
+      };
+    }
+    const plain = raw.match(/(?:^|[^a-z0-9])r?\s*(\d+)(?![.\d])/i);
+    if (plain) {
+      const major = Number(plain[1]);
+      return {
+        major,
+        minor: null,
+        label: `r${major}`,
+        slug: `r${major}`,
+        compact: String(major)
+      };
+    }
+    return null;
+  }
+
+  function familyKey(deviceName, slug) {
+    if (slug) {
+      return String(slug)
+        .toLowerCase()
+        .replace(/_r\d+(?:_\d+)?(?:_(?:sigfox|lorawan))?$/, "")
+        .replace(/_+/g, "_")
+        .replace(/^_|_$/g, "");
+    }
+    return slugifyTokens(deviceName)
+      .replace(/_r\d+(?:_\d+)?(?:_(?:sigfox|lorawan))?$/, "")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "");
+  }
+
+  function aliasFamily(key) {
+    const value = String(key || "");
+    if (/ranger.*ix|ix.*ranger|airwits_ix/.test(value)) return "airwits_ix";
+    if (/airwits_co2_plus|co2_plus/.test(value)) return "airwits_co2_plus";
+    if (/airwits_co2|co2/.test(value) && !/plus/.test(value)) return "airwits_co2";
+    if (/airwits_plus/.test(value)) return "airwits_plus";
+    if (/airwits_pm|airwits pm/.test(value)) return "airwits_pm";
+    if (/airwits_iaq|iaq/.test(value)) return "airwits_iaq";
+    if (/airwits_tvoc|tvoc/.test(value)) return "airwits_tvoc";
+    if (/multisense|multi_sense/.test(value)) return "airwits_multisense";
+    if (/press.?guard/.test(value)) return "press_guard";
+    if (/temp.?guard/.test(value)) return "temp_guard";
+    if (/twin.?guard/.test(value)) return "twin_guard";
+    if (/multi.?guard/.test(value)) return "multiguard";
+    if (/flex.?sense/.test(value)) return "flex_sense";
+    if (/detectify/.test(value)) return "detectify";
+    if (/ecosense/.test(value)) return "ecosense";
+    if (/^ranger$|ranger_r/.test(value)) return "ranger";
+    if (/^airwits$|airwits_r/.test(value)) return "airwits";
+    return value;
+  }
+
+  function stripNoise(text) {
+    return String(text || "")
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig, " ")
+      .replace(/\brnd\b/ig, " ")
+      .replace(/\bconnected[_\s-]*(inventions|finland)\b/ig, " ");
+  }
+
+  function extractHint(text) {
+    const cleaned = stripNoise(text);
+    const collapsed = collapse(cleaned);
+    const revisions = [];
+    const versionRe = /\br?\s*\d+\s*[._]\s*\d+\b|\br\s*\d+\b/ig;
+    let match;
+    while ((match = versionRe.exec(collapsed))) {
+      const parsed = parseRevision(match[0]);
+      if (parsed) revisions.push(parsed);
+    }
+    const withoutVersions = collapsed.replace(versionRe, " ").replace(/\s+/g, " ").trim();
+    const family = aliasFamily(slugifyTokens(withoutVersions));
+    return { family, revisions, raw: collapsed };
+  }
+
+  function schemaMeta(item) {
+    const family = aliasFamily(familyKey(item.device, item.slug));
+    const revision = parseRevision(item.version) || parseRevision(item.slug);
+    return { family, revision };
+  }
+
+  function revisionScore(hintRev, schemaRev) {
+    if (!hintRev || !schemaRev) return 0;
+    if (hintRev.slug === schemaRev.slug) return 12;
+    if (hintRev.major === schemaRev.major && hintRev.minor != null && schemaRev.minor != null && hintRev.minor === schemaRev.minor) {
+      return 12;
+    }
+    if (hintRev.major === schemaRev.major && (hintRev.minor == null || schemaRev.minor == null)) return 5;
+    if (hintRev.major === schemaRev.major) return 2;
+    return 0;
+  }
+
+  function expectedFirmware(schemaRev) {
+    if (!schemaRev) return null;
+    if (schemaRev.minor != null && schemaRev.minor <= 15) return schemaRev.minor;
+    if (schemaRev.minor == null && schemaRev.major <= 15) return schemaRev.major;
+    return null;
+  }
+
+  function fieldNumber(decoded, name) {
+    const hit = (decoded?.fields || []).find((item) => item.name === name);
+    if (hit && Number.isFinite(hit.number)) return hit.number;
+    const raw = decoded?.values?.[name];
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function saneFieldScore(decoded) {
+    let score = 0;
+    for (const item of decoded.fields || []) {
+      const n = item.number;
+      if (!Number.isFinite(n)) continue;
+      const name = String(item.name || "").toLowerCase();
+      if (name.includes("temp") && n >= -40 && n <= 85) score += 0.15;
+      if ((name.includes("humid") || name === "rh") && n >= 0 && n <= 100) score += 0.15;
+      if (name.includes("co2") && n >= 0 && n <= 10000) score += 0.2;
+      if ((name.includes("vdd") || name.includes("battery") || name.includes("voltage")) && n >= 1.5 && n <= 5.5) score += 0.15;
+    }
+    return Math.min(2, score);
+  }
+
+  function scoreMessages(item, sample, insightVersion) {
+    if (!sample.length) return { score: 0, detail: "no-sample" };
+    const meta = schemaMeta(item);
+    const expected = expectedFirmware(meta.revision);
+    let ok = 0;
+    let firmwareHits = 0;
+    let firmwareMatch = 0;
+    let sanity = 0;
+    const versions = [];
+    for (const msg of sample) {
+      const decoded = decodeUplink(item.schema, msg.hex);
+      if (!decoded || decoded.error || !decoded.fields.length) continue;
+      ok += 1;
+      sanity += saneFieldScore(decoded);
+      const fw = fieldNumber(decoded, "firmware_version");
+      if (fw != null) {
+        firmwareHits += 1;
+        versions.push(fw);
+        if (expected != null && fw === expected) firmwareMatch += 1;
+      }
+    }
+    const decodeRate = ok / sample.length;
+    let score = decodeRate * 8;
+    score += Math.min(2, sanity);
+    if (firmwareHits) {
+      const mode = modeNumber(versions);
+      const stable = versions.filter((value) => value === mode).length / firmwareHits;
+      score += stable * 2;
+      if (expected != null) {
+        const matchRate = firmwareMatch / firmwareHits;
+        score += matchRate * 10;
+        if (matchRate < 0.35) score -= 6;
+      }
+    }
+    if (insightVersion != null && expected != null) {
+      if (Number(insightVersion) === expected) score += 6;
+      else score -= 2;
+    }
+    if (decodeRate < 0.25) score -= 8;
+    return { score, detail: `decode=${ok}/${sample.length}` };
+  }
+
+  function modeNumber(values) {
+    const counts = new Map();
+    for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+    let best = null;
+    let bestCount = -1;
+    for (const [value, count] of counts) {
+      if (count > bestCount) {
+        best = value;
+        bestCount = count;
+      }
+    }
+    return best;
+  }
+
+  function bestRevisionScore(revisions, schemaRev) {
+    let best = 0;
+    for (const rev of revisions || []) best = Math.max(best, revisionScore(rev, schemaRev));
+    return best;
+  }
+
+  function scoreParser(item, parserModel, parserRevision) {
+    if (!parserModel && !parserRevision) return 0;
+    const hint = extractHint(`${parserModel || ""} ${parserRevision || ""}`);
+    const meta = schemaMeta(item);
+    let score = 0;
+    if (hint.family && hint.family === meta.family) score += 28;
+    else if (hint.family && meta.family.includes(hint.family)) score += 16;
+    else if (hint.family && hint.family.includes(meta.family)) score += 12;
+    const revisions = hint.revisions.slice();
+    if (parserRevision) {
+      const explicit = parseRevision(parserRevision);
+      if (explicit) revisions.push(explicit);
+    }
+    score += bestRevisionScore(revisions, meta.revision);
+    return score;
+  }
+
+  function scoreDeviceType(item, deviceTypeName) {
+    if (!deviceTypeName) return 0;
+    const hint = extractHint(deviceTypeName);
+    const meta = schemaMeta(item);
+    let score = 0;
+    if (hint.family && hint.family === meta.family) score += 14;
+    else if (hint.family && (meta.family.includes(hint.family) || hint.family.includes(meta.family))) score += 8;
+    else {
+      const deviceSlug = slugifyTokens(item.device);
+      if (hint.raw && collapse(item.device) && hint.raw.includes(collapse(item.device))) score += 6;
+      else if (deviceSlug && slugifyTokens(deviceTypeName).includes(deviceSlug)) score += 4;
+    }
+    score += bestRevisionScore(hint.revisions, meta.revision);
+    return score;
+  }
+
+  function suggestSchema(messages, hints) {
+    const options = normalizeHints(hints);
     const schemas = listSchemas();
-    const sample = (messages || []).filter((msg) => msg.kind === "uplink" && msg.hex).slice(0, 12);
-    if (!sample.length || !schemas.length) return null;
-    const hint = String(deviceTypeName || "").toLowerCase();
+    const sample = (messages || []).filter((msg) => msg.kind === "uplink" && msg.hex).slice(0, 16);
+    if (!schemas.length) return null;
+    if (!sample.length && !options.parserModel && !options.deviceTypeName) return null;
+
     let best = null;
     for (const item of schemas) {
-      let score = 0;
-      for (const msg of sample) {
-        const decoded = decodeUplink(item.schema, msg.hex);
-        if (decoded && !decoded.error && decoded.fields.length) score += 1;
+      const parserScore = scoreParser(item, options.parserModel, options.parserRevision);
+      const typeScore = scoreDeviceType(item, options.deviceTypeName);
+      const message = scoreMessages(item, sample, options.insightVersion);
+      const score = parserScore + typeScore + message.score;
+      if (!best || score > best.score) {
+        best = {
+          ...item,
+          score,
+          reasons: {
+            parser: parserScore,
+            deviceType: typeScore,
+            messages: message.score,
+            detail: message.detail
+          }
+        };
       }
-      if (hint && hint.includes(String(item.device || "").toLowerCase())) score += 3;
-      if (/ranger[_-]?ix/.test(hint) && String(item.slug).startsWith("airwits_ix_")) {
-        score += 8;
-        const version = String(item.version || "").toLowerCase().replace(/\s/g, "");
-        if (version && hint.includes(version.replace(".", "_")) || (version && hint.includes(version))) score += 4;
-      }
-      if (!best || score > best.score) best = { ...item, score };
     }
-    return best && best.score > 0 ? best : null;
+    if (!best || best.score < 6) return null;
+    return best;
   }
 
   function decodeAll(messages, schema) {

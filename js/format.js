@@ -26,9 +26,12 @@
     return `${date.getDate()}.${date.getMonth() + 1}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
-  function formatDay(ms) {
+  function formatDay(ms, mode) {
     if (!isTime(ms)) return "—";
     const date = new Date(ms);
+    if (mode === "utc") {
+      return `${date.getUTCDate()}.${date.getUTCMonth() + 1}.${date.getUTCFullYear()}`;
+    }
     return `${date.getDate()}.${date.getMonth() + 1}.${date.getFullYear()}`;
   }
 

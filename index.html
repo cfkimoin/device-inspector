@@ -20,10 +20,17 @@
   </header>
 
   <section class="command">
-    <label class="field grow">
+    <label class="field field-device">
       <span>Device id</span>
-      <input id="device-id" class="input" type="text" spellcheck="false" autocomplete="off" placeholder="Hex id, one device">
+      <input id="device-id" class="input" type="text" maxlength="32" spellcheck="false" autocomplete="off" placeholder="Device id">
     </label>
+    <button id="inspect-btn" class="btn btn-green" type="button">Inspect</button>
+    <label class="field field-fav">
+      <span>Favourites</span>
+      <select id="favorite-select" class="input"></select>
+    </label>
+    <button id="favorite-save" class="btn" type="button" title="Save current device to favourites">Save</button>
+    <button id="favorite-manage" class="btn" type="button">Manage</button>
     <label class="field">
       <span>Sigfox key</span>
       <select id="sigfox-profile" class="input"></select>
@@ -46,7 +53,6 @@
       <button id="tz-local" type="button" class="tz-btn is-on">Local</button>
       <button id="tz-utc" type="button" class="tz-btn">UTC</button>
     </div>
-    <button id="inspect-btn" class="btn btn-green" type="button">Inspect</button>
     <button id="creds-btn" class="btn" type="button">Keys</button>
     <button id="export-btn" class="btn" type="button">Export</button>
     <p id="status-line" class="status" role="status">Ready. One device, then message history, then Connected Insight.</p>
@@ -56,6 +62,7 @@
     <section class="panel" aria-labelledby="dossier-title">
       <div class="panel-head">
         <h2 id="dossier-title">Device</h2>
+        <button id="stats-btn" class="btn btn-orange" type="button" disabled>Message stats</button>
       </div>
       <div id="comms-banner" class="comms comms-idle">
         <span class="comms-dot"></span>
@@ -71,10 +78,13 @@
       <div class="panel-head">
         <h2 id="location-title">Nearest cell</h2>
       </div>
-      <p id="location-meta" class="meta">Basestation ids come from the latest message. Their coordinates come from the basestation API.</p>
+      <p id="location-meta" class="meta">Last 3 messages with radio · scroll zoom · drag pan</p>
       <p class="legend"><span class="swatch swatch-weak"></span>weak<span class="swatch swatch-mid"></span>mid<span class="swatch swatch-strong"></span>strong RSSI</p>
       <ul id="station-list" class="stations"></ul>
-      <canvas id="location-canvas" class="map" width="640" height="320"></canvas>
+      <div class="map-wrap">
+        <canvas id="location-canvas" class="map" width="640" height="320"></canvas>
+        <div id="map-tooltip" class="map-tooltip" hidden></div>
+      </div>
       <p class="map-credit">Map data <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></p>
     </section>
 
@@ -85,23 +95,17 @@
       <div id="insights-body" class="insights"></div>
     </section>
 
-    <section class="panel span-all" aria-labelledby="downlink-title">
-      <div class="panel-head">
-        <h2 id="downlink-title">Downlink</h2>
-        <button id="details-btn" class="btn btn-orange" type="button">Details</button>
-      </div>
-      <div id="downlink-body" class="downlink">
-        <p class="dim">Direct or webhook configuration is not loaded until Details is clicked.</p>
-      </div>
-    </section>
-
-    <section class="panel" aria-labelledby="sigfox-chart-title">
+    <section class="panel panel-chart" aria-labelledby="sigfox-chart-title">
       <div class="panel-head">
         <h2 id="sigfox-chart-title">Sigfox history</h2>
         <button id="sigfox-reload" class="btn btn-orange" type="button" hidden>Reload</button>
         <label class="inline">
           <span class="dim">Schema</span>
           <select id="schema-select" class="input input-small"></select>
+        </label>
+        <label class="inline check">
+          <input id="auto-schema" type="checkbox" checked>
+          <span class="dim">Auto-detect</span>
         </label>
         <label class="inline">
           <span class="dim">Field</span>
@@ -113,7 +117,7 @@
       <div id="recent-frames" class="recent"></div>
     </section>
 
-    <section class="panel" aria-labelledby="ci-chart-title">
+    <section class="panel panel-chart" aria-labelledby="ci-chart-title">
       <div class="panel-head">
         <h2 id="ci-chart-title">Connected Insight</h2>
         <button id="insight-reload" class="btn btn-orange" type="button" hidden>Reload</button>
@@ -124,6 +128,17 @@
       </div>
       <canvas id="ci-chart" class="chart" width="800" height="260"></canvas>
       <p id="ci-readout" class="meta">Loads after the Sigfox history.</p>
+    </section>
+
+    <section id="downlink-panel" class="panel span-all panel-downlink" aria-labelledby="downlink-title">
+      <div class="panel-head">
+        <h2 id="downlink-title">Downlink</h2>
+        <p id="downlink-summary" class="meta downlink-summary">Not loaded · click Details</p>
+        <button id="details-btn" class="btn btn-orange" type="button">Details</button>
+      </div>
+      <div id="downlink-body" class="downlink">
+        <p class="dim">Direct or webhook configuration is not loaded until Details is clicked.</p>
+      </div>
     </section>
   </main>
 
@@ -138,19 +153,68 @@
         <form id="sigfox-cred-form" class="cred-col">
           <h3>Sigfox</h3>
           <div id="sigfox-cred-list" class="cred-list"></div>
+          <input id="sfx-id" type="hidden" value="">
           <label>Name <input id="sfx-name" class="input" type="text" maxlength="80" placeholder="Group name"></label>
           <label>Login <input id="sfx-login" class="input" type="text" autocomplete="off" spellcheck="false"></label>
-          <label>Password <input id="sfx-password" class="input" type="password" autocomplete="off"></label>
-          <button class="btn btn-green" type="submit">Save Sigfox key</button>
+          <label>Password <input id="sfx-password" class="input" type="password" autocomplete="off" placeholder="Leave blank to keep"></label>
+          <div class="cred-actions">
+            <button id="sfx-save" class="btn btn-green" type="submit">Save Sigfox key</button>
+            <button id="sfx-cancel" class="btn" type="button" hidden>Cancel</button>
+          </div>
         </form>
         <form id="ci-cred-form" class="cred-col">
           <h3>Connected Insight</h3>
           <div id="ci-cred-list" class="cred-list"></div>
+          <input id="ci-id" type="hidden" value="">
           <label>Name <input id="ci-name" class="input" type="text" maxlength="80" placeholder="Partner name"></label>
-          <label>Public token <input id="ci-token" class="input" type="password" autocomplete="off" spellcheck="false"></label>
-          <button class="btn btn-green" type="submit">Save Insight key</button>
+          <label>Public token <input id="ci-token" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep"></label>
+          <div class="cred-actions">
+            <button id="ci-save" class="btn btn-green" type="submit">Save Insight key</button>
+            <button id="ci-cancel" class="btn" type="button" hidden>Cancel</button>
+          </div>
         </form>
       </div>
+    </div>
+  </div>
+
+  <div id="stats-modal" class="modal" hidden>
+    <div class="modal-card modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="stats-title">
+      <div class="panel-head">
+        <h2 id="stats-title">Message stats</h2>
+        <div class="inline">
+          <button id="stats-refresh" class="btn btn-orange" type="button">Refresh</button>
+          <button id="stats-close" class="btn" type="button">Close</button>
+        </div>
+      </div>
+      <p id="stats-meta" class="meta">Daily Sigfox consumptions by year. Loaded only when you open this panel.</p>
+      <p class="legend">
+        <span class="swatch" style="background:#7f9468"></span>uplink
+        <span class="swatch" style="background:#9b7bb8"></span>downlink
+        <span class="swatch" style="background:#5f9ea0"></span>oob
+      </p>
+      <canvas id="stats-chart" class="chart chart-tall" width="920" height="320"></canvas>
+      <p id="stats-readout" class="meta">Hover the chart for a day.</p>
+    </div>
+  </div>
+
+  <div id="favorite-modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="favorite-title">
+      <div class="panel-head">
+        <h2 id="favorite-title">Favourites</h2>
+        <button id="favorite-close" class="btn" type="button">Close</button>
+      </div>
+      <p class="dim">Stored in this browser only. The dropdown shows the 10 most recently used. Schema is remembered so recall can skip a failed auto-detect.</p>
+      <form id="favorite-form" class="fav-form">
+        <input id="fav-id" type="hidden" value="">
+        <label>Device id <input id="fav-device-id" class="input" type="text" maxlength="32" spellcheck="false" autocomplete="off" required></label>
+        <label>Name <input id="fav-name" class="input" type="text" maxlength="120" placeholder="Optional display name"></label>
+        <label>Schema <select id="fav-schema" class="input"></select></label>
+        <div class="fav-actions">
+          <button class="btn btn-green" type="submit">Save favourite</button>
+          <button id="fav-reset" class="btn" type="button">New</button>
+        </div>
+      </form>
+      <div id="favorite-list" class="fav-list"></div>
     </div>
   </div>
 
@@ -160,6 +224,7 @@
   <script src="./js/vendor/connectedinsight.global.js"></script>
   <script src="./js/format.js"></script>
   <script src="./js/credentials.js"></script>
+  <script src="./js/favorites.js"></script>
   <script src="./js/sigfox.js"></script>
   <script src="./js/decode.js"></script>
   <script src="./js/insight-client.js"></script>

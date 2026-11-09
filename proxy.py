@@ -25,6 +25,7 @@ os.chdir(ROOT)
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
 SIGFOX_API_BASE = "https://api.sigfox.com/v2"
+SIGFOX_LEGACY_API_BASE = "https://backend.sigfox.com/api"
 FOXER_API_BASE = "https://api.foxeriot.com"
 
 
@@ -39,13 +40,15 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/sigfox-proxy/"):
             self._proxy_to_sigfox()
+        elif self.path.startswith("/sigfox-legacy-proxy/"):
+            self._proxy_to_sigfox_legacy()
         elif self.path.startswith("/ci-proxy/"):
             self._proxy_to_foxer()
         else:
             super().do_GET()
 
     def do_OPTIONS(self):
-        if self.path.startswith("/sigfox-proxy/") or self.path.startswith("/ci-proxy/"):
+        if self.path.startswith("/sigfox-proxy/") or self.path.startswith("/sigfox-legacy-proxy/") or self.path.startswith("/ci-proxy/"):
             self.send_response(204)
             self.end_headers()
         else:
@@ -54,6 +57,10 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def _proxy_to_sigfox(self):
         sigfox_path = self.path[len("/sigfox-proxy/"):]
         self._forward(f"{SIGFOX_API_BASE}/{sigfox_path}", timeout=30)
+
+    def _proxy_to_sigfox_legacy(self):
+        sigfox_path = self.path[len("/sigfox-legacy-proxy/"):]
+        self._forward(f"{SIGFOX_LEGACY_API_BASE}/{sigfox_path}", timeout=30)
 
     def _proxy_to_foxer(self):
         remote_path = self.path[len("/ci-proxy/"):]

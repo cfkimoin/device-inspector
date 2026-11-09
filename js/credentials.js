@@ -45,16 +45,20 @@
     const store = load();
     const name = String(profile.name || "").trim();
     if (!name) throw new Error("A name is required.");
+    const id = String(profile.id || "").trim() || uid();
+    const existing = store[kind].find((item) => item.id === id) || null;
     const next = {
-      id: profile.id || uid(),
+      id,
       name
     };
     if (kind === "sigfox") {
       next.login = String(profile.login || "").trim();
-      next.password = String(profile.password || "");
+      const password = String(profile.password || "");
+      next.password = password || existing?.password || "";
       if (!next.login || !next.password) throw new Error("Sigfox login and password are required.");
     } else {
-      next.token = String(profile.token || "").trim();
+      const token = String(profile.token || "").trim();
+      next.token = token || existing?.token || "";
       if (!next.token) throw new Error("A Connected Insight token is required.");
     }
     const index = store[kind].findIndex((item) => item.id === next.id);
@@ -64,6 +68,10 @@
     else store.activeInsight = next.id;
     save(store);
     return next;
+  }
+
+  function get(kind, id) {
+    return load()[kind].find((item) => item.id === id) || null;
   }
 
   function remove(kind, id) {
@@ -99,6 +107,7 @@
 
   window.deviceInspectorCredentials = {
     list,
+    get,
     active,
     upsert,
     remove,

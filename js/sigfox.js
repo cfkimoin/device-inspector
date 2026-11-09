@@ -5,16 +5,19 @@
   // Automatic:
   //   1. GET /devices/{id}?fields=...     dossier, comms, certificates, last fix
   //   2. GET /devices/{id}/messages       all pages, ~3 months, basestation ids in rinfos
-  //   3. GET /base-stations/{id}          only the stations heard on the latest message
+  //   3. GET /base-stations/{id}          stations heard on the last 3 messages with radio info
   // Only if the user clicks Details:
-  //   3. GET /device-types/{id}           direct vs webhook, downlink hex, keep-alive
-  //   4. GET /device-types/{id}/callbacks only when that mode is CALLBACK
+  //   4. GET /device-types/{id}           direct vs webhook, downlink hex, keep-alive
+  //   5. GET /device-types/{id}/callbacks only when that mode is CALLBACK
+  // Only if the user opens Message stats:
+  //   6. GET /devices/{id}/consumption/{year}   one call per year, activation→now
   // Not called: /locations, /certificate, /users, a second OOB listing.
 
   const GAP_MS = 1100;
   const PAGE_LIMIT = 100;
   const MAX_PAGES = 200;
   const HISTORY_MS = 92 * 24 * 60 * 60 * 1000;
+  const STATION_MESSAGE_WINDOW = 3;
   const DEVICE_FIELDS = "deviceType(name),group(name,type,level,bssId,customerBssId),contract(name),productCertificate(key),modemCertificate(key)";
   const MESSAGE_FIELDS = "oob,ackRequired,rinfos(cbStatus,rep,repetitions,baseStation(name)),downlinkAnswerStatus(baseStation(name))";
 
@@ -113,9 +116,10 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async function proxyGetNow(path, authHeader) {
+  async function proxyGetNow(path, authHeader, options) {
     calls += 1;
-    const response = await fetch(`/sigfox-proxy/${path}`, {
+    const prefix = options?.legacy ? "/sigfox-legacy-proxy/" : "/sigfox-proxy/";
+    const response = await fetch(`${prefix}${path}`, {
       headers: { Authorization: authHeader, Accept: "application/json" }
     });
     if (response.status === 429) {
@@ -138,12 +142,12 @@
     return response.json();
   }
 
-  function proxyGet(path, authHeader) {
+  function proxyGet(path, authHeader, options) {
     const task = chain.then(async () => {
       const pause = Math.max(0, lastRequestAt + GAP_MS - Date.now());
       if (pause > 0) await wait(pause);
       lastRequestAt = Date.now();
-      return proxyGetNow(path, authHeader);
+      return proxyGetNow(path, authHeader, options);
     });
     chain = task.catch(() => {});
     return task;
@@ -360,20 +364,69 @@
     };
   }
 
+  function mergeStations(stations) {
+    const byId = new Map();
+    for (const station of stations || []) {
+      if (!station?.id) continue;
+      const prev = byId.get(station.id);
+      if (!prev) {
+        byId.set(station.id, { ...station });
+        continue;
+      }
+      const next = { ...prev };
+      if (station.rssi != null && (next.rssi == null || station.rssi > next.rssi)) {
+        next.rssi = station.rssi;
+        if (Number.isFinite(station.time)) next.time = station.time;
+      }
+      if (next.lat == null && station.lat != null) {
+        next.lat = station.lat;
+        next.lng = station.lng;
+      }
+      if (!next.name && station.name) next.name = station.name;
+      if (station.error && !next.error) next.error = station.error;
+      byId.set(station.id, next);
+    }
+    return [...byId.values()];
+  }
+
+  function stationsFromRecentMessages(messages, limit) {
+    const ordered = [...(messages || [])].filter((msg) => Number.isFinite(msg.time)).sort((a, b) => b.time - a.time);
+    const collected = [];
+    let used = 0;
+    let stationTime = null;
+    for (const msg of ordered) {
+      const stations = (msg.stations || []).filter((station) => station.id || station.lat != null);
+      if (!stations.length) continue;
+      if (stationTime == null) stationTime = msg.time;
+      collected.push(...stations);
+      used += 1;
+      if (used >= limit) break;
+    }
+    return { stations: mergeStations(collected), stationTime, messageCount: used };
+  }
+
   function locationFromMessages(messages, device, resolvedStations) {
     const ordered = [...(messages || [])].filter((msg) => Number.isFinite(msg.time)).sort((a, b) => b.time - a.time);
-    let stations = [];
-    let stationTime = null;
     let computed = null;
     for (const msg of ordered) {
-      if (!computed && msg.computed) computed = msg.computed;
-      if (stations.length === 0 && (msg.stations || []).some((station) => station.id || station.lat != null)) {
-        stations = msg.stations;
-        stationTime = msg.time;
+      if (msg.computed) {
+        computed = msg.computed;
+        break;
       }
-      if (computed && stations.length) break;
     }
-    if (Array.isArray(resolvedStations)) stations = resolvedStations;
+    const recent = stationsFromRecentMessages(messages, STATION_MESSAGE_WINDOW);
+    let stations = recent.stations;
+    let stationTime = recent.stationTime;
+    if (Array.isArray(resolvedStations)) {
+      stations = mergeStations(resolvedStations);
+      if (!stationTime) {
+        for (const station of stations) {
+          if (Number.isFinite(station.time) && (stationTime == null || station.time > stationTime)) {
+            stationTime = station.time;
+          }
+        }
+      }
+    }
     if (!computed && device?.lastComputedLocation) {
       computed = { ...device.lastComputedLocation, time: device.lastCom };
     }
@@ -392,6 +445,7 @@
       stations,
       nearest,
       stationTime,
+      stationMessageCount: recent.messageCount,
       sourceLabel: computed ? locationSourceLabel(computed.source) : (nearest ? "nearest basestation" : ""),
       distanceMeters: haversineMeters(computed, nearest),
       pendingStations: false
@@ -399,12 +453,7 @@
   }
 
   function lastHeardStations(messages) {
-    const ordered = [...(messages || [])].filter((msg) => Number.isFinite(msg.time)).sort((a, b) => b.time - a.time);
-    for (const msg of ordered) {
-      const stations = (msg.stations || []).filter((station) => station.id);
-      if (stations.length) return stations;
-    }
-    return [];
+    return stationsFromRecentMessages(messages, STATION_MESSAGE_WINDOW).stations.filter((station) => station.id);
   }
 
   async function loadStationLocations(stations, authHeader, hooks) {
@@ -427,7 +476,11 @@
           ...station,
           name: station.name || (body.name ? String(body.name) : ""),
           lat: pair ? pair.lat : null,
-          lng: pair ? pair.lng : null
+          lng: pair ? pair.lng : null,
+          elevation: num(body.elevation ?? body.altitude ?? body.location?.altitude),
+          antenna: body.antenna != null ? String(body.antenna) : (station.antenna || ""),
+          status: body.status != null ? String(body.status) : (station.status || ""),
+          raw: body
         });
       } catch (error) {
         located.push({ ...station, error: error.message || String(error) });
@@ -471,6 +524,77 @@
       callbacks = rows.map(normalizeCallback);
     }
     return { deviceType, callbacks };
+  }
+
+  function dayMs(year, dayIndex) {
+    return Date.UTC(year, 0, 1 + dayIndex);
+  }
+
+  function normalizeConsumptionYear(json, year) {
+    const body = unwrap(json) || {};
+    const block = body.consumption && typeof body.consumption === "object" ? body.consumption : body;
+    const rows = Array.isArray(block?.consumptions)
+      ? block.consumptions
+      : (Array.isArray(body?.consumptions) ? body.consumptions : (Array.isArray(body?.data) ? body.data : []));
+    const days = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      if (row == null) continue;
+      const uplink = num(row.frameCount ?? row.uplinkFrameCount ?? row.messages);
+      const downlink = num(row.downlinkFrameCount ?? row.downlinkCount);
+      const oob = num(row.oobFrameCount ?? row.roamingFrameCount ?? row.oobCount);
+      days.push({
+        time: dayMs(year, index),
+        year,
+        dayIndex: index,
+        uplink: uplink || 0,
+        downlink: downlink || 0,
+        oob: oob || 0
+      });
+    }
+    return { year, id: block?.id ? String(block.id) : `${year}`, days };
+  }
+
+  function consumptionIdCandidates(deviceId) {
+    const raw = String(deviceId || "").trim();
+    const hex = raw.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+    if (!hex) return [];
+    const trimmed = hex.replace(/^0+(?=\S)/, "") || "0";
+    return [...new Set([hex, trimmed].filter(Boolean))];
+  }
+
+  async function loadDeviceConsumptionYear(deviceId, year, authHeader) {
+    // v2 path is singular: /devices/{id}/consumption/{year}
+    let lastError = null;
+    for (const id of consumptionIdCandidates(deviceId)) {
+      const path = `devices/${encodeURIComponent(id)}/consumption/${encodeURIComponent(year)}`;
+      try {
+        const json = await proxyGet(path, authHeader);
+        const normalized = normalizeConsumptionYear(json, Number(year));
+        normalized.source = `v2:${path}`;
+        return normalized;
+      } catch (error) {
+        lastError = error;
+        if (error?.code === "RATE_LIMIT") throw error;
+        if (error?.status && ![400, 404].includes(error.status)) throw error;
+      }
+    }
+    throw lastError || new Error(`No consumption data for device ${deviceId} in ${year}.`);
+  }
+
+  function consumptionYearsForDevice(device, nowMs) {
+    const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const endYear = new Date(now).getUTCFullYear();
+    let startYear = endYear;
+    if (Number.isFinite(device?.activationTime) && device.activationTime > 0) {
+      startYear = new Date(device.activationTime).getUTCFullYear();
+    } else if (Number.isFinite(device?.creationTime) && device.creationTime > 0) {
+      startYear = new Date(device.creationTime).getUTCFullYear();
+    }
+    if (startYear > endYear) startYear = endYear;
+    const years = [];
+    for (let year = endYear; year >= startYear; year -= 1) years.push(year);
+    return years;
   }
 
   async function loadMessages(deviceId, authHeader, hooks) {
@@ -517,6 +641,8 @@
     describeComState,
     loadDossier,
     loadDownlinkDetails,
+    loadDeviceConsumptionYear,
+    consumptionYearsForDevice,
     loadMessages,
     lastHeardStations,
     loadStationLocations,
