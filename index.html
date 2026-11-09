@@ -7,7 +7,12 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <div class="sweep" aria-hidden="true"></div>
+  <div id="load-log" class="load-log" hidden aria-live="polite">
+    <div class="load-log-card">
+      <p class="load-log-title">Loading</p>
+      <div id="load-log-lines" class="load-log-lines"></div>
+    </div>
+  </div>
   <header class="top">
     <div class="brand">
       <p class="eyebrow">Connected Inventions</p>
@@ -59,78 +64,82 @@
   </section>
 
   <main class="layout">
-    <section class="panel" aria-labelledby="dossier-title">
-      <div class="panel-head">
-        <h2 id="dossier-title">Device</h2>
-        <button id="stats-btn" class="btn btn-orange" type="button" disabled>Message stats</button>
-      </div>
-      <div id="comms-banner" class="comms comms-idle">
-        <span class="comms-dot"></span>
-        <div>
-          <div class="comms-label">Comms</div>
-          <p class="comms-detail">Communication state appears after the device call.</p>
+    <div class="row-top">
+      <section class="panel panel-device" aria-labelledby="dossier-title">
+        <div class="panel-head">
+          <h2 id="dossier-title">Device</h2>
+          <button id="stats-btn" class="btn btn-orange" type="button" disabled>Message stats</button>
         </div>
-      </div>
-      <dl id="dossier-facts" class="facts"></dl>
-    </section>
+        <div id="comms-banner" class="comms comms-idle">
+          <span class="comms-dot"></span>
+          <div>
+            <div class="comms-label">Comms</div>
+            <p class="comms-detail">Communication state appears after the device call.</p>
+          </div>
+        </div>
+        <dl id="dossier-facts" class="facts"></dl>
+      </section>
 
-    <section class="panel" aria-labelledby="location-title">
-      <div class="panel-head">
-        <h2 id="location-title">Nearest cell</h2>
-      </div>
-      <p id="location-meta" class="meta">Last 3 messages with radio · scroll zoom · drag pan</p>
-      <p class="legend"><span class="swatch swatch-weak"></span>weak<span class="swatch swatch-mid"></span>mid<span class="swatch swatch-strong"></span>strong RSSI</p>
-      <ul id="station-list" class="stations"></ul>
-      <div class="map-wrap">
-        <canvas id="location-canvas" class="map" width="640" height="320"></canvas>
-        <div id="map-tooltip" class="map-tooltip" hidden></div>
-      </div>
-      <p class="map-credit">Map data <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></p>
-    </section>
+      <section class="panel panel-insights" aria-labelledby="insights-title">
+        <div class="panel-head">
+          <h2 id="insights-title">Analysis</h2>
+        </div>
+        <div id="insights-body" class="insights"></div>
+      </section>
 
-    <section class="panel panel-insights" aria-labelledby="insights-title">
-      <div class="panel-head">
-        <h2 id="insights-title">Analysis</h2>
-      </div>
-      <div id="insights-body" class="insights"></div>
-    </section>
+      <section class="panel panel-location" aria-labelledby="location-title">
+        <div class="panel-head">
+          <h2 id="location-title">Nearest cell</h2>
+          <p class="legend legend-inline"><span class="swatch swatch-weak"></span>weak<span class="swatch swatch-mid"></span>mid<span class="swatch swatch-strong"></span>strong</p>
+        </div>
+        <p id="location-meta" class="meta meta-tight">Cells from loaded history · scroll zoom · drag pan</p>
+        <ul id="station-list" class="stations"></ul>
+        <div class="map-wrap">
+          <canvas id="location-canvas" class="map" width="320" height="320"></canvas>
+          <div id="map-tooltip" class="map-tooltip" hidden></div>
+        </div>
+        <p class="map-credit">Map data <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></p>
+      </section>
+    </div>
 
-    <section class="panel panel-chart" aria-labelledby="sigfox-chart-title">
-      <div class="panel-head">
-        <h2 id="sigfox-chart-title">Sigfox history</h2>
-        <button id="sigfox-reload" class="btn btn-orange" type="button" hidden>Reload</button>
-        <label class="inline">
-          <span class="dim">Schema</span>
-          <select id="schema-select" class="input input-small"></select>
-        </label>
-        <label class="inline check">
-          <input id="auto-schema" type="checkbox" checked>
-          <span class="dim">Auto-detect</span>
-        </label>
-        <label class="inline">
-          <span class="dim">Field</span>
-          <select id="sigfox-field" class="input input-small"></select>
-        </label>
-      </div>
-      <canvas id="sigfox-chart" class="chart" width="800" height="260"></canvas>
-      <p id="sigfox-readout" class="meta">History loads after the device is on screen. About three months, one paged call sequence.</p>
-      <div id="recent-frames" class="recent"></div>
-    </section>
+    <div class="row-charts">
+      <section class="panel panel-chart" aria-labelledby="sigfox-chart-title">
+        <div class="panel-head">
+          <h2 id="sigfox-chart-title">Sigfox history</h2>
+          <button id="sigfox-reload" class="btn btn-orange" type="button" hidden>Reload</button>
+          <label class="inline">
+            <span class="dim">Schema</span>
+            <select id="schema-select" class="input input-small"></select>
+          </label>
+          <label class="inline check">
+            <input id="auto-schema" type="checkbox" checked>
+            <span class="dim">Auto-detect</span>
+          </label>
+          <label class="inline">
+            <span class="dim">Field</span>
+            <select id="sigfox-field" class="input input-small"></select>
+          </label>
+        </div>
+        <canvas id="sigfox-chart" class="chart" width="800" height="220"></canvas>
+        <p id="sigfox-readout" class="meta">History loads after the device is on screen. About three months, one paged call sequence.</p>
+        <div id="recent-frames" class="recent"></div>
+      </section>
 
-    <section class="panel panel-chart" aria-labelledby="ci-chart-title">
-      <div class="panel-head">
-        <h2 id="ci-chart-title">Connected Insight</h2>
-        <button id="insight-reload" class="btn btn-orange" type="button" hidden>Reload</button>
-        <label class="inline">
-          <span class="dim">Series</span>
-          <select id="ci-field" class="input input-small"></select>
-        </label>
-      </div>
-      <canvas id="ci-chart" class="chart" width="800" height="260"></canvas>
-      <p id="ci-readout" class="meta">Loads after the Sigfox history.</p>
-    </section>
+      <section class="panel panel-chart" aria-labelledby="ci-chart-title">
+        <div class="panel-head">
+          <h2 id="ci-chart-title">Connected Insight</h2>
+          <button id="insight-reload" class="btn btn-orange" type="button" hidden>Reload</button>
+          <label class="inline">
+            <span class="dim">Series</span>
+            <select id="ci-field" class="input input-small"></select>
+          </label>
+        </div>
+        <canvas id="ci-chart" class="chart" width="800" height="220"></canvas>
+        <p id="ci-readout" class="meta">Loads after the Sigfox history.</p>
+      </section>
+    </div>
 
-    <section id="downlink-panel" class="panel span-all panel-downlink" aria-labelledby="downlink-title">
+    <section id="downlink-panel" class="panel panel-downlink" aria-labelledby="downlink-title">
       <div class="panel-head">
         <h2 id="downlink-title">Downlink</h2>
         <p id="downlink-summary" class="meta downlink-summary">Not loaded · click Details</p>

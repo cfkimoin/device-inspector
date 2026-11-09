@@ -1,9 +1,9 @@
 window.payloadSchemas = {
-  "generated_at": "2026-10-05T11:20:05.701Z",
+  "generated_at": "2026-11-09T14:57:01.329Z",
   "build_info": {
-    "build_date_iso": "2026-10-05T11:20:05.701Z",
-    "build_date_display": "05-10-2026",
-    "git_commit_short": "8089fd1"
+    "build_date_iso": "2026-11-09T14:57:01.329Z",
+    "build_date_display": "09-11-2026",
+    "git_commit_short": "d34ab18"
   },
   "source_paths": {
     "index": "payload_descriptions/index.yaml",
@@ -4852,13 +4852,8 @@ window.payloadSchemas = {
           "payloads": [
             {
               "name": "measurement",
-              "description": "7 bytes (14 hex chars). No discriminator; decoder uses length.",
-              "discriminator": {
-                "byte": 0,
-                "bit": 3,
-                "bits": 1,
-                "value": 0
-              },
+              "description": "7 bytes (14 hex chars). Selected by payload length. Header bit 3 is not a discriminator: after a downlink it can be set on a normal measurement (for example 0x25 becomes 0x28) and the frame is still temperature, humidity, and CO2.",
+              "payload_length": 7,
               "fields": [
                 {
                   "name": "is_system_message",
@@ -4866,7 +4861,7 @@ window.payloadSchemas = {
                   "bit": 3,
                   "bits": 1,
                   "type": "bool",
-                  "description": "Fixed discriminator value for this payload.",
+                  "description": "Header bit 3. Not used to select the variant; 7-byte frames are always measurements. 0 on a typical measurement, 1 after some downlinks.",
                   "fixed_value": 0
                 },
                 {
@@ -4949,19 +4944,7 @@ window.payloadSchemas = {
             },
             {
               "name": "system_msg_1",
-              "description": "System message function 1 (status/config echo), 11 bytes.",
-              "discriminator": {
-                "byte": 0,
-                "bit": 3,
-                "bits": 1,
-                "value": 1
-              },
-              "discriminator_function": {
-                "byte": 0,
-                "bit": 0,
-                "bits": 3,
-                "value": 1
-              },
+              "description": "Status/config echo for any uplink that is not 7 bytes. Usually 11 bytes (header, message count, TX voltage, 8-byte config). 12 bytes when send_co2_offset_in_sys1 pads a drift/10 byte. Header bits are not used for selection: the echo sent right after a downlink can have bit 3 clear and still carry the active config.",
               "fields": [
                 {
                   "name": "system_message_function",
@@ -5020,6 +5003,15 @@ window.payloadSchemas = {
                   "type": "bytes",
                   "length": 8,
                   "description": "Active downlink configuration bytes."
+                },
+                {
+                  "name": "co2_drift",
+                  "byte": 11,
+                  "type": "u8",
+                  "mult": 10,
+                  "unit": "ppm",
+                  "optional": true,
+                  "description": "Present only when send_co2_offset_in_sys1 is enabled (12-byte Sys1). The byte stores drift/10; decoded as raw * 10 ppm."
                 }
               ]
             }

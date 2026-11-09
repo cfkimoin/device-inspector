@@ -50,6 +50,8 @@
     tz: localStorage.getItem(TZ_KEY) === "utc" ? "utc" : "local"
   };
   let statsJob = 0;
+  let loadLogHideTimer = 0;
+  let loadLogSession = 0;
 
   function setStatus(text) {
     $("status-line").textContent = text;
@@ -70,6 +72,83 @@
     const value = String(text || "").replace(/\s+/g, " ").trim();
     if (value.length <= 160) return value;
     return `${value.slice(0, 157)}…`;
+  }
+
+  function failHint(text) {
+    const value = String(text || "").replace(/\s+/g, " ").trim();
+    if (!value) return "Failed";
+    if (/403|401|not allowed|forbidden|no access|permission|provider token/i.test(value)) return "No access";
+    if (/404|not found/i.test(value)) return "Not found";
+    if (/429|rate limit/i.test(value)) return "Rate limit";
+    if (/network|failed to fetch|cannot reach|timeout/i.test(value)) return "Network error";
+    return shortReason(value).slice(0, 72);
+  }
+
+  function beginLoadLog(title) {
+    window.clearTimeout(loadLogHideTimer);
+    loadLogSession += 1;
+    const panel = $("load-log");
+    const lines = $("load-log-lines");
+    if (!panel || !lines) return loadLogSession;
+    $("load-log").querySelector(".load-log-title").textContent = title || "Loading";
+    lines.innerHTML = "";
+    panel.hidden = false;
+    return loadLogSession;
+  }
+
+  function loadLogLine(text, session) {
+    if (session != null && session !== loadLogSession) return null;
+    const lines = $("load-log-lines");
+    if (!lines || $("load-log")?.hidden) return null;
+    const row = document.createElement("div");
+    row.className = "load-log-line is-pending";
+    const label = document.createElement("span");
+    label.className = "load-log-text";
+    label.textContent = text;
+    const mark = document.createElement("span");
+    mark.className = "load-log-mark";
+    mark.textContent = "…";
+    row.append(label, mark);
+    lines.appendChild(row);
+    lines.scrollTop = lines.scrollHeight;
+    return row;
+  }
+
+  function updateLoadLogLine(row, text) {
+    if (!row) return;
+    const label = row.querySelector(".load-log-text");
+    if (label) label.textContent = text;
+    const lines = $("load-log-lines");
+    if (lines) lines.scrollTop = lines.scrollHeight;
+  }
+
+  function finishLoadLogLine(row, ok, detail) {
+    if (!row) return;
+    row.classList.remove("is-pending");
+    row.classList.add(ok ? "is-ok" : "is-fail");
+    const mark = row.querySelector(".load-log-mark");
+    if (!mark) return;
+    if (ok) mark.textContent = "OK";
+    else mark.textContent = detail ? `FAILED (${detail})` : "FAILED";
+  }
+
+  function failPendingLoadLog(detail) {
+    const lines = $("load-log-lines");
+    if (!lines) return;
+    lines.querySelectorAll(".load-log-line.is-pending").forEach((row) => {
+      finishLoadLogLine(row, false, detail);
+    });
+  }
+
+  function endLoadLog(session, delayMs) {
+    if (session != null && session !== loadLogSession) return;
+    const wait = Number.isFinite(delayMs) ? delayMs : 2200;
+    window.clearTimeout(loadLogHideTimer);
+    loadLogHideTimer = window.setTimeout(() => {
+      if (session != null && session !== loadLogSession) return;
+      const panel = $("load-log");
+      if (panel) panel.hidden = true;
+    }, wait);
   }
 
   function updateReloadButtons() {
@@ -444,12 +523,12 @@
     $("dossier-facts").innerHTML = rows.map(([label, value, className, options]) => fact(label, value, className, options)).join("");
   }
 
-  function renderLocation() {
+  function renderLocation(options) {
     const location = state.location || { pendingStations: true, stations: [] };
-    charts.drawMap($("location-canvas"), location, { keepView: true });
+    charts.drawMap($("location-canvas"), location, { keepView: options?.keepView !== false });
     const nearest = location?.nearest;
     if (!state.device) {
-      $("location-meta").textContent = "Basestation ids come from the last 3 messages with radio info. Their coordinates come from the basestation API.";
+      $("location-meta").textContent = "Basestation ids come from the loaded Sigfox history. Coordinates often arrive on the messages; missing ones are looked up.";
       $("station-list").innerHTML = "";
       return;
     }
@@ -463,7 +542,9 @@
     }
     const heard = location.stations || [];
     const stamp = Number.isFinite(location.stationTime) ? time(location.stationTime) : "";
-    const windowLabel = location.stationMessageCount === 1 ? "Last message" : `Last ${location.stationMessageCount || 3} messages`;
+    const windowLabel = location.stationMessageCount === 1
+      ? "1 message with radio"
+      : `${location.stationMessageCount || 0} messages with radio`;
     if (nearest && heard.length) {
       const distance = Number.isFinite(location.distanceMeters)
         ? ` · ${location.distanceMeters < 1000 ? `${Math.round(location.distanceMeters)} m` : `${(location.distanceMeters / 1000).toFixed(1)} km`} from the fix`
@@ -471,7 +552,7 @@
       const rssi = nearest.rssi == null ? "" : ` ${fmt.formatNumber(nearest.rssi, 1)} dBm`;
       $("location-meta").textContent = `${windowLabel}${stamp ? ` · newest ${stamp}` : ""} · ${heard.length} basestation${heard.length === 1 ? "" : "s"}. Strongest ${nearest.id || "unknown"}${rssi}${distance}.`;
     } else if (location.approx) {
-      $("location-meta").textContent = `Fix ${location.approx.lat.toFixed(5)}, ${location.approx.lng.toFixed(5)} (${location.sourceLabel}). No basestation was listed on the last messages.`;
+      $("location-meta").textContent = `Fix ${location.approx.lat.toFixed(5)}, ${location.approx.lng.toFixed(5)} (${location.sourceLabel}). No basestation was listed in the loaded history.`;
     } else if ((location.stations || []).length) {
       const ids = location.stations.map((station) => station.id).filter(Boolean).join(", ");
       const failure = location.stations.find((station) => station.error);
@@ -734,7 +815,7 @@
         : (state.sigfoxPhase === "loading"
           ? "Loading Sigfox history…"
           : "History loads after the device is on screen. About three months, one paged call sequence."));
-    const recent = [...state.messages].filter((msg) => Number.isFinite(msg.time)).sort((a, b) => b.time - a.time).slice(0, 6);
+    const recent = [...state.messages].filter((msg) => Number.isFinite(msg.time)).sort((a, b) => b.time - a.time).slice(0, 3);
     $("recent-frames").innerHTML = recent.map((msg) => {
       const variant = msg.decoded?.variant || msg.decoded?.error || msg.kind;
       return `<div><span>${fmt.escapeHtml(time(msg.time))}  ${msg.seq == null ? "" : `#${msg.seq}`}</span><span>${fmt.escapeHtml(fmt.formatLqi(msg.lqi))}  ${fmt.escapeHtml(variant)}</span></div>`;
@@ -1060,7 +1141,9 @@
     renderAll();
   }
 
-  async function loadInsight(token) {
+  async function loadInsight(token, options) {
+    const logSession = options?.logSession;
+    const insightLine = loadLogLine(`Collecting measurement data from Connected Insight for ${state.deviceId}…`, logSession);
     state.insightPhase = "loading";
     state.insightNote = "";
     const profile = creds.active("insight");
@@ -1070,6 +1153,7 @@
       state.insightParser = null;
       state.insightVersion = null;
       state.insightPhase = "failed";
+      finishLoadLogLine(insightLine, false, "No key selected");
       renderInsightChart();
       updateReloadButtons();
       return;
@@ -1100,7 +1184,9 @@
         fromMs: range.fromMs,
         toMs: range.toMs,
         onProgress: (progress) => {
-          if (token === job) setStatus(`Connected Insight · ${progress.received} observations`);
+          if (token !== job) return;
+          setStatus(`Connected Insight · ${progress.received} observations`);
+          updateLoadLogLine(insightLine, `Collecting measurement data from Connected Insight for ${state.deviceId}… (${progress.received})`);
         }
       });
       if (token !== job) return;
@@ -1110,11 +1196,13 @@
       if (state.autoSchema) maybeAutodetectSchema();
       state.insightPhase = "ready";
       state.insightNote = state.insightStore?.truncated ? "Insight history truncated" : "";
+      finishLoadLogLine(insightLine, true);
     } catch (error) {
       if (token !== job) return;
       state.insightStore = null;
       state.insightPhase = "failed";
       state.insightNote = error.message || String(error);
+      finishLoadLogLine(insightLine, false, failHint(state.insightNote));
     }
     if (token === job) {
       renderInsightChart();
@@ -1162,10 +1250,12 @@
     state.consumptionLoading = false;
     state.consumptionNote = "";
     localStorage.setItem(DEVICE_KEY, deviceId);
+    const logSession = beginLoadLog(`Inspect ${deviceId}`);
     setBusy(true);
     try {
       renderAll();
       setStatus("Reading the device. Message history starts after this.");
+      const deviceLine = loadLogLine(`Collecting information from Sigfox backend for ${deviceId}…`, logSession);
       const dossier = await sigfox.loadDossier(deviceId, auth, {
         onProgress: (text) => { if (my === job) setStatus(text); },
         cancelled: () => my !== job
@@ -1173,29 +1263,47 @@
       if (my !== job) return;
       state.device = dossier.device;
       state.location = dossier.location;
+      finishLoadLogLine(deviceLine, true);
       renderAll();
       setStatus("Device is on screen. Loading Sigfox messages…");
+      const historyLine = loadLogLine(`Collecting measurement data from Sigfox backend for ${deviceId}…`, logSession);
       const history = await sigfox.loadMessages(deviceId, auth, {
-        onProgress: (text) => { if (my === job) { setStatus(text); renderCalls(); } },
+        onProgress: (text) => {
+          if (my !== job) return;
+          setStatus(text);
+          renderCalls();
+          updateLoadLogLine(historyLine, `Collecting measurement data from Sigfox backend for ${deviceId}… (${text})`);
+        },
         cancelled: () => my !== job
       });
       if (my !== job) return;
       state.sigfoxPhase = history.rateLimited ? "failed" : "ready";
       state.sigfoxError = history.rateLimited ? (history.error || "Sigfox rate limit reached before the history finished.") : "";
       applyMessages(history);
+      finishLoadLogLine(historyLine, !history.rateLimited, history.rateLimited ? failHint(state.sigfoxError) : "");
       const heard = sigfox.lastHeardStations(state.messages);
       if (heard.length) {
         setStatus("Looking up basestations from the last 3 messages…");
-        const stations = await sigfox.loadStationLocations(heard, auth, {
-          onProgress: (text) => { if (my === job) { setStatus(text); renderCalls(); } },
-          cancelled: () => my !== job
-        });
-        if (my !== job) return;
-        state.location = sigfox.locationFromMessages(state.messages, state.device, stations);
-        renderLocation();
+        const mapLine = loadLogLine("Rendering map…", logSession);
+        try {
+          const stations = await sigfox.loadStationLocations(heard, auth, {
+            onProgress: (text) => { if (my === job) { setStatus(text); renderCalls(); } },
+            cancelled: () => my !== job
+          });
+          if (my !== job) return;
+          state.location = sigfox.locationFromMessages(state.messages, state.device, stations);
+          renderLocation({ keepView: false });
+          finishLoadLogLine(mapLine, true);
+        } catch (error) {
+          if (my !== job) return;
+          finishLoadLogLine(mapLine, false, failHint(error.message || String(error)));
+        }
+      } else {
+        state.location = sigfox.locationFromMessages(state.messages, state.device);
+        renderLocation({ keepView: false });
       }
       setStatus("Sigfox history loaded. Loading Connected Insight…");
-      await loadInsight(my);
+      await loadInsight(my, { logSession });
       if (my !== job) return;
       const tail = state.rateLimited ? " Sigfox stopped early on the rate limit." : "";
       setStatus(`Done. ${sigfox.callCount()} Sigfox calls.${tail}`);
@@ -1210,10 +1318,14 @@
         state.insightPhase = "failed";
         state.insightNote = "Not loaded. Insight was not requested because Sigfox did not finish.";
       }
+      failPendingLoadLog(failHint(error.message || String(error)));
       setStatus(error.message || String(error));
       renderAll();
     } finally {
-      if (my === job) setBusy(false);
+      if (my === job) {
+        setBusy(false);
+        endLoadLog(logSession, 2200);
+      }
     }
   }
 
@@ -1239,11 +1351,13 @@
     state.sigfoxPhase = "loading";
     state.sigfoxError = "";
     localStorage.setItem(DEVICE_KEY, deviceId);
+    const logSession = beginLoadLog(`Reload Sigfox ${deviceId}`);
     setBusy(true);
     try {
       renderSigfoxChart();
       if (!state.device || state.device.id !== deviceId) {
         setStatus("Reading the device again…");
+        const deviceLine = loadLogLine(`Collecting information from Sigfox backend for ${deviceId}…`, logSession);
         const dossier = await sigfox.loadDossier(deviceId, auth, {
           onProgress: (text) => { if (my === job) setStatus(text); },
           cancelled: () => my !== job
@@ -1251,27 +1365,45 @@
         if (my !== job) return;
         state.device = dossier.device;
         state.location = dossier.location;
+        finishLoadLogLine(deviceLine, true);
         renderAll();
       }
       setStatus("Reloading Sigfox messages…");
+      const historyLine = loadLogLine(`Collecting measurement data from Sigfox backend for ${deviceId}…`, logSession);
       const history = await sigfox.loadMessages(deviceId, auth, {
-        onProgress: (text) => { if (my === job) { setStatus(text); renderCalls(); } },
+        onProgress: (text) => {
+          if (my !== job) return;
+          setStatus(text);
+          renderCalls();
+          updateLoadLogLine(historyLine, `Collecting measurement data from Sigfox backend for ${deviceId}… (${text})`);
+        },
         cancelled: () => my !== job
       });
       if (my !== job) return;
       state.sigfoxPhase = history.rateLimited ? "failed" : "ready";
       state.sigfoxError = history.rateLimited ? (history.error || "Sigfox rate limit reached before the history finished.") : "";
       applyMessages(history);
+      finishLoadLogLine(historyLine, !history.rateLimited, history.rateLimited ? failHint(state.sigfoxError) : "");
       const heard = sigfox.lastHeardStations(state.messages);
       if (heard.length) {
         setStatus("Looking up basestations from the last 3 messages…");
-        const stations = await sigfox.loadStationLocations(heard, auth, {
-          onProgress: (text) => { if (my === job) { setStatus(text); renderCalls(); } },
-          cancelled: () => my !== job
-        });
-        if (my !== job) return;
-        state.location = sigfox.locationFromMessages(state.messages, state.device, stations);
-        renderLocation();
+        const mapLine = loadLogLine("Rendering map…", logSession);
+        try {
+          const stations = await sigfox.loadStationLocations(heard, auth, {
+            onProgress: (text) => { if (my === job) { setStatus(text); renderCalls(); } },
+            cancelled: () => my !== job
+          });
+          if (my !== job) return;
+          state.location = sigfox.locationFromMessages(state.messages, state.device, stations);
+          renderLocation({ keepView: false });
+          finishLoadLogLine(mapLine, true);
+        } catch (error) {
+          if (my !== job) return;
+          finishLoadLogLine(mapLine, false, failHint(error.message || String(error)));
+        }
+      } else {
+        state.location = sigfox.locationFromMessages(state.messages, state.device);
+        renderLocation({ keepView: false });
       }
       const tail = state.rateLimited ? " Sigfox stopped early on the rate limit." : "";
       setStatus(state.sigfoxPhase === "ready" ? `Sigfox history loaded.${tail}` : (state.sigfoxError || "Sigfox history did not load."));
@@ -1280,10 +1412,14 @@
       if (my !== job) return;
       state.sigfoxPhase = "failed";
       state.sigfoxError = error.message || String(error);
+      failPendingLoadLog(failHint(state.sigfoxError));
       setStatus(state.sigfoxError);
       renderAll();
     } finally {
-      if (my === job) setBusy(false);
+      if (my === job) {
+        setBusy(false);
+        endLoadLog(logSession, 2200);
+      }
     }
   }
 
@@ -1299,14 +1435,18 @@
     }
     const my = ++job;
     state.inspected = true;
+    const logSession = beginLoadLog(`Reload Insight ${state.deviceId}`);
     setBusy(true);
     try {
       setStatus("Reloading Connected Insight…");
-      await loadInsight(my);
+      await loadInsight(my, { logSession });
       if (my !== job) return;
       setStatus(state.insightPhase === "ready" ? "Connected Insight loaded." : (state.insightNote || "Connected Insight did not load."));
     } finally {
-      if (my === job) setBusy(false);
+      if (my === job) {
+        setBusy(false);
+        endLoadLog(logSession, 2200);
+      }
     }
   }
 
@@ -1515,12 +1655,14 @@
     $("ci-range").addEventListener("change", async () => {
       if (state.deviceId) {
         const my = job;
+        const logSession = beginLoadLog(`Insight window · ${state.deviceId}`);
         setStatus("Loading Connected Insight for the new window…");
         setLoading(true);
         try {
-          await loadInsight(my);
+          await loadInsight(my, { logSession });
         } finally {
           if (!busy && !detailsBusy) setLoading(false);
+          endLoadLog(logSession, 1800);
         }
       }
     });

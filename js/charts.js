@@ -51,6 +51,48 @@
     return ticks;
   }
 
+  function timeTicks(min, max, target) {
+    const goal = Math.max(2, target || 4);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return [Date.now()];
+    const lo = Math.min(min, max);
+    const hi = Math.max(min, max);
+    if (hi === lo) return [lo];
+    const span = hi - lo;
+    const steps = [
+      60e3, 5 * 60e3, 15 * 60e3, 30 * 60e3,
+      3600e3, 2 * 3600e3, 3 * 3600e3, 6 * 3600e3, 12 * 3600e3,
+      86400e3, 2 * 86400e3, 7 * 86400e3, 14 * 86400e3, 30 * 86400e3
+    ];
+    let step = steps[steps.length - 1];
+    for (const candidate of steps) {
+      if (span / candidate <= goal) {
+        step = candidate;
+        break;
+      }
+    }
+    const start = Math.ceil(lo / step) * step;
+    const ticks = [];
+    for (let value = start; value <= hi; value += step) {
+      ticks.push(value);
+      if (ticks.length > 16) break;
+    }
+    if (!ticks.length || ticks[0] > lo + step * 0.05) ticks.unshift(lo);
+    if (ticks[ticks.length - 1] < hi - step * 0.05) ticks.push(hi);
+    return ticks;
+  }
+
+  function extent(values) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const value of values || []) {
+      if (!Number.isFinite(value)) continue;
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 1 };
+    return { min, max };
+  }
+
   function targetTickCount(pixelSpan, size) {
     return Math.max(3, Math.min(8, Math.round(pixelSpan / size)));
   }
@@ -60,7 +102,9 @@
     const unit = options?.unit ? ` ${options.unit}` : "";
     const tz = options?.tz || "local";
     const yTicks = niceTicks(plot.minY, plot.maxY, targetTickCount(height - plot.padTop - plot.padBottom, 36));
-    const xTicks = niceTicks(plot.minX, plot.maxX, targetTickCount(width - plot.padX - 12, 120));
+    const xTicks = options?.timeAxis === false
+      ? niceTicks(plot.minX, plot.maxX, targetTickCount(width - plot.padX - 12, 120))
+      : timeTicks(plot.minX, plot.maxX, targetTickCount(width - plot.padX - 12, 120));
 
     ctx.strokeStyle = GRID;
     ctx.lineWidth = 1;
@@ -139,15 +183,13 @@
     }
     const xs = rows.map((point) => point.x);
     const ys = rows.map((point) => point.y);
-    const dataMinX = Math.min(...xs);
-    const dataMaxX = Math.max(...xs);
-    const dataMinY = Math.min(...ys);
-    const dataMaxY = Math.max(...ys);
-    const yTicks = niceTicks(dataMinY, dataMaxY, targetTickCount(height - 44, 36));
-    const minX = dataMinX;
-    const maxX = dataMaxX;
-    const minY = Math.min(dataMinY, yTicks[0]);
-    const maxY = Math.max(dataMaxY, yTicks[yTicks.length - 1]);
+    const xExtent = extent(xs);
+    const yExtent = extent(ys);
+    const yTicks = niceTicks(yExtent.min, yExtent.max, targetTickCount(height - 44, 36));
+    const minX = xExtent.min;
+    const maxX = xExtent.max;
+    const minY = Math.min(yExtent.min, yTicks[0]);
+    const maxY = Math.max(yExtent.max, yTicks[yTicks.length - 1]);
     const padX = 58;
     const padTop = 16;
     const padBottom = 28;
@@ -215,9 +257,11 @@
     }
     const xs = series.flatMap((item) => item.points.map((point) => point.x));
     const ys = series.flatMap((item) => item.points.map((point) => point.y));
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const dataMaxY = Math.max(...ys, 1);
+    const xExtent = extent(xs);
+    const yExtent = extent(ys);
+    const minX = xExtent.min;
+    const maxX = xExtent.max;
+    const dataMaxY = Math.max(yExtent.max, 1);
     const yTicks = niceTicks(0, dataMaxY, targetTickCount(height - 44, 36));
     const minY = 0;
     const maxY = Math.max(dataMaxY, yTicks[yTicks.length - 1]);

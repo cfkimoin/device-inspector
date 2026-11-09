@@ -464,7 +464,7 @@
             time: obs?.time,
             name,
             value: obs?.value,
-            unit: obs?.unit || set?.unit || ""
+            unit: obs?.unit || ""
           });
         }
       }

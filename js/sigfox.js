@@ -5,7 +5,7 @@
   // Automatic:
   //   1. GET /devices/{id}?fields=...     dossier, comms, certificates, last fix
   //   2. GET /devices/{id}/messages       all pages, ~3 months, basestation ids in rinfos
-  //   3. GET /base-stations/{id}          stations heard on the last 3 messages with radio info
+  //   3. GET /base-stations/{id}          stations heard across loaded history (coords often already on rinfos)
   // Only if the user clicks Details:
   //   4. GET /device-types/{id}           direct vs webhook, downlink hex, keep-alive
   //   5. GET /device-types/{id}/callbacks only when that mode is CALLBACK
@@ -17,7 +17,7 @@
   const PAGE_LIMIT = 100;
   const MAX_PAGES = 200;
   const HISTORY_MS = 92 * 24 * 60 * 60 * 1000;
-  const STATION_MESSAGE_WINDOW = 3;
+  const STATION_LOOKUP_LIMIT = 24;
   const DEVICE_FIELDS = "deviceType(name),group(name,type,level,bssId,customerBssId),contract(name),productCertificate(key),modemCertificate(key)";
   const MESSAGE_FIELDS = "oob,ackRequired,rinfos(cbStatus,rep,repetitions,baseStation(name)),downlinkAnswerStatus(baseStation(name))";
 
@@ -389,7 +389,7 @@
     return [...byId.values()];
   }
 
-  function stationsFromRecentMessages(messages, limit) {
+  function stationsFromMessages(messages) {
     const ordered = [...(messages || [])].filter((msg) => Number.isFinite(msg.time)).sort((a, b) => b.time - a.time);
     const collected = [];
     let used = 0;
@@ -400,7 +400,6 @@
       if (stationTime == null) stationTime = msg.time;
       collected.push(...stations);
       used += 1;
-      if (used >= limit) break;
     }
     return { stations: mergeStations(collected), stationTime, messageCount: used };
   }
@@ -414,11 +413,11 @@
         break;
       }
     }
-    const recent = stationsFromRecentMessages(messages, STATION_MESSAGE_WINDOW);
-    let stations = recent.stations;
-    let stationTime = recent.stationTime;
+    const heard = stationsFromMessages(messages);
+    let stations = heard.stations;
+    let stationTime = heard.stationTime;
     if (Array.isArray(resolvedStations)) {
-      stations = mergeStations(resolvedStations);
+      stations = mergeStations([...(heard.stations || []), ...resolvedStations]);
       if (!stationTime) {
         for (const station of stations) {
           if (Number.isFinite(station.time) && (stationTime == null || station.time > stationTime)) {
@@ -445,7 +444,7 @@
       stations,
       nearest,
       stationTime,
-      stationMessageCount: recent.messageCount,
+      stationMessageCount: heard.messageCount,
       sourceLabel: computed ? locationSourceLabel(computed.source) : (nearest ? "nearest basestation" : ""),
       distanceMeters: haversineMeters(computed, nearest),
       pendingStations: false
@@ -453,12 +452,15 @@
   }
 
   function lastHeardStations(messages) {
-    return stationsFromRecentMessages(messages, STATION_MESSAGE_WINDOW).stations.filter((station) => station.id);
+    return stationsFromMessages(messages).stations
+      .filter((station) => station.id)
+      .sort((a, b) => (Number(b.time) || 0) - (Number(a.time) || 0));
   }
 
   async function loadStationLocations(stations, authHeader, hooks) {
     const located = [];
     const seen = new Set();
+    let lookups = 0;
     for (const station of stations || []) {
       if (!station?.id || seen.has(station.id)) continue;
       seen.add(station.id);
@@ -466,7 +468,12 @@
         located.push(station);
         continue;
       }
+      if (lookups >= STATION_LOOKUP_LIMIT) {
+        located.push({ ...station, error: station.error || "Basestation lookup capped for this inspect." });
+        continue;
+      }
       if (hooks?.cancelled?.()) break;
+      lookups += 1;
       hooks?.onProgress?.(`Basestation ${station.id}`);
       try {
         const json = await proxyGet(`base-stations/${encodeURIComponent(station.id)}`, authHeader);
